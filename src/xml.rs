@@ -1,33 +1,11 @@
 //! The little XML S3 speaks: a listing naming keys, an error naming a code.
 //!
-//! Picked by hand rather than parsed. Both documents are flat, S3 writes
-//! them and only S3 reads what [`crate::Session`] writes, and the one
-//! question either side asks — the text of every element by one name — is
-//! a scan, not a tree.
+//! Written by hand, both documents flat; read back by the capability's
+//! flat scan (ADR-0044), which is a scan, not a tree, because the one
+//! question either side asks is the text of every element by one name.
 
-/// The text of every `<name>` element, entities unescaped.
-#[must_use]
-pub fn texts(xml: &str, name: &str) -> Vec<String> {
-    let open = format!("<{name}>");
-    let close = format!("</{name}>");
-    let mut found = Vec::new();
-    let mut rest = xml;
-    while let Some(start) = rest.find(&open) {
-        let after = &rest[start + open.len()..];
-        let Some(end) = after.find(&close) else {
-            break;
-        };
-        found.push(unescape(&after[..end]));
-        rest = &after[end + close.len()..];
-    }
-    found
-}
-
-/// The text of the first `<name>` element.
-#[must_use]
-pub fn first(xml: &str, name: &str) -> Option<String> {
-    texts(xml, name).into_iter().next()
-}
+use transport::xml::escape;
+pub use transport::xml::{first, texts};
 
 /// A `ListBucketResult` naming `keys` under `prefix` in `bucket`.
 #[must_use]
@@ -58,21 +36,6 @@ pub fn error(code: &str, message: &str) -> String {
         escape(code),
         escape(message)
     )
-}
-
-fn escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-fn unescape(text: &str) -> String {
-    text.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
 }
 
 #[cfg(test)]

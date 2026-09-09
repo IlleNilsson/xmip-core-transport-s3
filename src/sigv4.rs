@@ -12,8 +12,8 @@ use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use transport::error::{Result, protocol_error};
 
-use crate::percent::encode;
-use crate::wire::Request;
+use http::message::Request;
+use http::percent::encode;
 
 const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 const SERVICE: &str = "s3";
