@@ -33,14 +33,27 @@ pub mod session;
 pub mod sigv4;
 pub mod xml;
 
+use std::net::TcpListener;
 use std::time::Duration;
 
 pub use client::Client;
+use http::endpoint;
 pub use session::{Event, Session};
-use transport::error::Result;
+use transport::error::{Result, protocol_error};
+use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
 use transport::{Arrived, Directions, NoNativeClaim, ResourceClaim, Transport};
 
+/// What the loopback pair agrees on: one bucket, one object put there, one
+/// credential in one region that the far end expects and the near end
+/// signs as.
+const LOOPBACK_BUCKET: &str = "probe";
+const LOOPBACK_OBJECT: &str = "probe.bin";
+const LOOPBACK_REGION: &str = "eu-north-1";
+const LOOPBACK_ACCESS_KEY: &str = "AKIDPROBE";
+const LOOPBACK_SECRET_KEY: &str = "probe";
+
+#[derive(Clone)]
 pub struct S3Transport {
     endpoint: String,
     region: String,
@@ -155,10 +168,72 @@ impl Transport for S3Transport {
     }
 }
 
+impl S3Transport {
+    /// Both ends on this machine: an ephemeral local port, one credential
+    /// the far end expects and the near end signs as, the loopback timeout.
+    #[must_use]
+    pub fn loopback() -> Self {
+        Self::new("http://127.0.0.1:0", LOOPBACK_REGION, LOOPBACK_BUCKET)
+            .with_credentials(LOOPBACK_ACCESS_KEY, LOOPBACK_SECRET_KEY)
+            .timing_out_after(LOOPBACK_TIMEOUT)
+    }
+}
+
+/// A bound session waiting for its one store. S3 opens a connection per
+/// call, so the session serves one request at a time until one stored.
+struct Serving {
+    session: Session,
+    listener: TcpListener,
+    address: String,
+}
+
+impl FarEnd for Serving {
+    fn address(&self) -> &str {
+        &self.address
+    }
+
+    fn take_one(self: Box<Self>) -> Result<Arrived> {
+        let Self {
+            mut session,
+            listener,
+            ..
+        } = *self;
+        loop {
+            match session.serve_one(&listener)? {
+                Event::Stored(arrived) => return Ok(arrived),
+                Event::Refused(code) => {
+                    return Err(protocol_error(format!("the session refused: {code}")));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+impl Loopback for S3Transport {
+    fn far_end(&self) -> Result<Box<dyn FarEnd>> {
+        let (listener, address) = socket::bind_tcp(&endpoint::authority(&self.endpoint)?)?;
+        Ok(Box::new(Serving {
+            session: self.session(),
+            listener,
+            address,
+        }))
+    }
+
+    /// Put the payload as one object, from a fresh near end signing as
+    /// this transport does, at the endpoint on `address`.
+    fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
+        let near = Self {
+            endpoint: format!("http://{address}"),
+            ..self.clone()
+        };
+        near.send(LOOPBACK_OBJECT, payload)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::TcpListener;
     use std::thread::JoinHandle;
 
     fn node(endpoint: &str, secret: &str) -> S3Transport {
@@ -237,5 +312,38 @@ mod tests {
             .send("k", b"")
             .expect_err("no scheme");
         assert!(!failure.retryable);
+    }
+
+    #[test]
+    fn the_loopback_stores_one_object_through_its_own_session() {
+        let pair = S3Transport::loopback();
+        let arrived = pair.round(b"an object").expect("round");
+        assert_eq!(arrived.bytes, b"an object");
+        assert_eq!(arrived.origin_uri, "s3://probe/probe.bin");
+        assert_eq!(pair.name(), "s3");
+        assert_eq!(pair.ceiling(), None);
+    }
+
+    /// The Playground's edge payloads, written here so the crate does not
+    /// depend on it.
+    fn edge_payloads() -> Vec<(&'static str, Vec<u8>)> {
+        vec![
+            ("empty", Vec::new()),
+            ("one byte", vec![0x2a]),
+            ("every byte", (0..=255).collect()),
+            ("nul run", vec![0; 512]),
+            ("high bytes", vec![0xff; 512]),
+            ("crlf storm", b"\r\n".repeat(400)),
+        ]
+    }
+
+    #[test]
+    fn the_loopback_returns_the_edge_payloads_whole() {
+        let pair = S3Transport::loopback();
+        for (name, payload) in edge_payloads() {
+            assert!(pair.refuses(&payload).is_none(), "{name}");
+            let arrived = pair.round(&payload).expect(name);
+            assert_eq!(arrived.bytes, payload, "{name}");
+        }
     }
 }
