@@ -11,14 +11,16 @@
 //! `tls` feature, which is the http technology's TLS (ADR-0033).
 //!
 //! ```text
-//! sigv4.rs     signing a request, and verifying one
 //! xml.rs       the listing and the error, picked by hand
 //! client.rs    Xmip's side: list, get, put, delete
 //! session.rs   the far end a test or the playground runs on loopback
 //! ```
 //!
-//! The endpoint, the percent-encoding and HTTP itself come from the http
-//! technology, the flat XML scan from the capability (ADR-0044).
+//! The endpoint, the percent-encoding, HTTP itself, Signature Version 4
+//! and the judgement of an answer come from the http technology, the flat
+//! XML scan from the capability (ADR-0044). The signer lived here until
+//! 2026-09-14, when aws-sqs was found importing it: a signature over HTTP
+//! is the carrier's to share.
 //!
 //! S3 has objects and no lock this transport takes, so [`Transport::claims`]
 //! answers [`NoNativeClaim`], ADR-0024 clause 5. The native claim the record
@@ -30,7 +32,6 @@
 
 pub mod client;
 pub mod session;
-pub mod sigv4;
 pub mod xml;
 
 use std::net::TcpListener;

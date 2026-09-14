@@ -12,13 +12,13 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use transport::Arrived;
-use transport::error::{Result, protocol_error};
-use transport::socket;
+use transport::error::Result;
 
-use crate::sigv4::Signer;
 use crate::xml;
-use http::message::{self, Request, Response};
+use http::message::{Request, Response};
 use http::percent::decode;
+use http::server;
+use http::sigv4::Signer;
 
 /// What the client did, as [`Session::serve_one`] reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,7 +46,7 @@ impl Session {
     #[must_use]
     pub fn new(region: &str, access_key: &str, secret_key: &str) -> Self {
         Self {
-            signer: Signer::new(region, access_key, secret_key),
+            signer: Signer::new("s3", region, access_key, secret_key),
             objects: BTreeMap::new(),
             timeout: None,
         }
@@ -78,13 +78,7 @@ impl Session {
     /// # Errors
     /// Where the connection could not be accepted, broke, or sent nothing.
     pub fn serve_one(&mut self, listener: &TcpListener) -> Result<Event> {
-        let (stream, _) = socket::accept_tcp(listener, self.timeout)?;
-        let (mut reader, mut writer) = socket::split(stream)?;
-        let request = message::read_request(&mut reader)?
-            .ok_or_else(|| protocol_error("a connection that sent no request"))?;
-        let (event, response) = self.answer(&request);
-        message::write_response(&mut writer, &response)?;
-        Ok(event)
+        server::serve_one(listener, self.timeout, |request| self.answer(request))
     }
 
     fn answer(&mut self, request: &Request) -> (Event, Response) {
@@ -178,7 +172,7 @@ mod tests {
     const AT: &str = "20260908T000000Z";
 
     fn signed(request: Request) -> Request {
-        Signer::new("r", "AKID", "secret").sign(request.header("Host", "s3.local"), AT)
+        Signer::new("s3", "r", "AKID", "secret").sign(request.header("Host", "s3.local"), AT)
     }
 
     #[test]
@@ -200,7 +194,7 @@ mod tests {
             (Event::Deleted("s3://b/k".to_string()), 204)
         );
         assert!(session.objects().is_empty());
-        let other = Signer::new("r", "AKID", "wrong")
+        let other = Signer::new("s3", "r", "AKID", "wrong")
             .sign(Request::new("GET", "/b/k").header("Host", "s3.local"), AT);
         let (event, response) = session.answer(&other);
         assert_eq!(event, Event::Refused("SignatureDoesNotMatch".to_string()));

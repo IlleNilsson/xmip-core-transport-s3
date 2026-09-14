@@ -8,13 +8,13 @@
 
 use std::time::Duration;
 
-use transport::error::{Result, TransportError};
+use transport::error::Result;
 
-use crate::sigv4::{self, Signer};
 use crate::xml;
 use http::endpoint;
 use http::message::{self, Request, Response};
 use http::percent::encode;
+use http::sigv4::{self, Signer};
 
 pub struct Client {
     endpoint: String,
@@ -33,7 +33,7 @@ impl Client {
         Ok(Self {
             endpoint: endpoint.to_string(),
             host: endpoint::authority(endpoint)?,
-            signer: Signer::new(region, access_key, secret_key),
+            signer: Signer::new("s3", region, access_key, secret_key),
             timeout: None,
         })
     }
@@ -101,20 +101,14 @@ fn object(bucket: &str, key: &str) -> String {
 }
 
 /// A 2xx answer as it is; anything else as a failure naming the status and
-/// the code S3 put in the body, retryable where S3 says come back.
+/// the code S3 put in the body, retryable where HTTP or S3 says come back.
 fn judge(response: Response) -> Result<Response> {
-    if (200..300).contains(&response.status) {
-        return Ok(response);
-    }
-    let code = xml::first(&response.text(), "Code").unwrap_or_default();
-    let retryable = response.status >= 500
-        || response.status == 408
-        || response.status == 429
-        || code == "SlowDown";
-    Err(TransportError {
-        message: format!("S3 answered {} {code}", response.status),
-        retryable,
-    })
+    message::judge(
+        "S3",
+        response,
+        |answer| xml::first(&answer.text(), "Code").unwrap_or_default(),
+        |code| code == "SlowDown",
+    )
 }
 
 #[cfg(test)]
