@@ -4,8 +4,7 @@
 //! flat scan (ADR-0044), which is a scan, not a tree, because the one
 //! question either side asks is the text of every element by one name.
 
-use transport::xml::escape;
-pub use transport::xml::{first, texts};
+use codec::xml::escape;
 
 /// A `ListBucketResult` naming `keys` under `prefix` in `bucket`.
 #[must_use]
@@ -41,16 +40,17 @@ pub fn error(code: &str, message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use transport::xml::{first, texts};
 
     #[test]
     fn a_listing_names_its_keys_back_with_entities_intact() {
         let keys = vec!["in/a&b.edi".to_string(), "in/<c>.edi".to_string()];
         let xml = listing("orders", "in/", &keys);
         assert!(xml.contains("<Key>in/a&amp;b.edi</Key>"));
-        assert_eq!(texts(&xml, "Key"), keys);
-        assert_eq!(first(&xml, "Prefix").as_deref(), Some("in/"));
-        assert!(texts(&xml, "Absent").is_empty());
-        assert!(texts("<Key>unclosed", "Key").is_empty());
+        assert_eq!(texts(&xml, "Key").expect("read"), keys);
+        assert_eq!(first(&xml, "Prefix").expect("read").as_deref(), Some("in/"));
+        assert!(texts(&xml, "Absent").expect("read").is_empty());
+        assert!(texts("<Key>unclosed", "Key").expect("read").is_empty());
     }
 
     #[test]
@@ -60,9 +60,9 @@ mod tests {
             "The request signature we calculated",
         );
         assert_eq!(
-            first(&xml, "Code").as_deref(),
+            first(&xml, "Code").expect("read").as_deref(),
             Some("SignatureDoesNotMatch")
         );
-        assert_eq!(first(&xml, "Absent"), None);
+        assert_eq!(first(&xml, "Absent").expect("read"), None);
     }
 }

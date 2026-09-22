@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use transport::error::Result;
 
-use crate::xml;
 use http::endpoint;
 use http::message::{self, Request, Response};
 use http::percent::encode;
@@ -55,7 +54,7 @@ impl Client {
         let request = Request::new("GET", format!("/{}", encode(bucket, false)))
             .query("list-type", "2")
             .query("prefix", prefix);
-        Ok(xml::texts(&self.call(request)?.text(), "Key"))
+        transport::xml::texts(&self.call(request)?.text(), "Key")
     }
 
     /// The object at `key` in `bucket`.
@@ -106,7 +105,12 @@ fn judge(response: Response) -> Result<Response> {
     message::judge(
         "S3",
         response,
-        |answer| xml::first(&answer.text(), "Code").unwrap_or_default(),
+        |answer| {
+            transport::xml::first(&answer.text(), "Code")
+                .ok()
+                .flatten()
+                .unwrap_or_default()
+        },
         |code| code == "SlowDown",
     )
 }
@@ -160,7 +164,7 @@ mod tests {
     fn a_server_failure_is_worth_repeating_and_a_client_one_is_not() {
         assert!(judge(Response::new(503)).expect_err("server").retryable);
         assert!(judge(Response::new(429)).expect_err("throttled").retryable);
-        let slow = Response::new(400).body(xml::error("SlowDown", "").as_bytes());
+        let slow = Response::new(400).body(crate::xml::error("SlowDown", "").as_bytes());
         assert!(judge(slow).expect_err("slow down").retryable);
         assert!(!judge(Response::new(403)).expect_err("forbidden").retryable);
         assert!(Client::new("orders.local", "r", "a", "s").is_err());
