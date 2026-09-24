@@ -15,10 +15,10 @@ use transport::Arrived;
 use transport::error::Result;
 
 use crate::xml;
+use aws::sigv4::Signer;
 use http::message::{Request, Response};
 use http::percent::decode;
 use http::server;
-use http::sigv4::Signer;
 
 /// What the client did, as [`Session::serve_one`] reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]

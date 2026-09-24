@@ -16,11 +16,12 @@
 //! session.rs   the far end a test or the playground runs on loopback
 //! ```
 //!
-//! The endpoint, the percent-encoding, HTTP itself, Signature Version 4
-//! and the judgement of an answer come from the http technology, the flat
-//! XML scan from the capability (ADR-0044). The signer lived here until
-//! 2026-09-14, when aws-sqs was found importing it: a signature over HTTP
-//! is the carrier's to share.
+//! The endpoint, the percent-encoding, HTTP itself and the judgement of an
+//! answer come from the http technology, Signature Version 4 from the AWS
+//! crate, the flat XML scan from the capability (ADR-0044). The signer
+//! lived here until 2026-09-14, when aws-sqs was found importing it, and in
+//! the http technology until the owner's ruling of 2026-09-22: what AWS
+//! speaks is the AWS crate's to share.
 //!
 //! S3 has objects and no lock this transport takes, so [`Transport::claims`]
 //! answers [`NoNativeClaim`], ADR-0024 clause 5. The native claim the record
