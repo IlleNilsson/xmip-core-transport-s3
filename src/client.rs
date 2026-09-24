@@ -13,7 +13,7 @@ use transport::error::Result;
 use aws::sigv4::{self, Signer};
 use http::endpoint;
 use http::message::{self, Request, Response};
-use http::percent::encode;
+use net::percent::encode;
 
 pub struct Client {
     endpoint: String,
