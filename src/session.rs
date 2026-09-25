@@ -16,8 +16,8 @@ use transport::error::Result;
 
 use crate::xml;
 use aws::sigv4::Signer;
-use http::message::{Request, Response};
 use http::server;
+use net::http::{Request, Response};
 use net::percent::decode;
 
 /// What the client did, as [`Session::serve_one`] reports it.
