@@ -14,6 +14,7 @@ use std::time::Duration;
 use transport::Arrived;
 use transport::error::Result;
 
+use crate::client::signer;
 use crate::xml;
 use aws::sigv4::Signer;
 use http::server;
@@ -46,7 +47,7 @@ impl Session {
     #[must_use]
     pub fn new(region: &str, access_key: &str, secret_key: &str) -> Self {
         Self {
-            signer: Signer::new("s3", region, access_key, secret_key),
+            signer: signer(region, access_key, secret_key),
             objects: BTreeMap::new(),
             timeout: None,
         }
@@ -172,7 +173,7 @@ mod tests {
     const AT: &str = "20260908T000000Z";
 
     fn signed(request: Request) -> Request {
-        Signer::new("s3", "r", "AKID", "secret").sign(request.header("Host", "s3.local"), AT)
+        signer("r", "AKID", "secret").sign(request.header("Host", "s3.local"), AT)
     }
 
     #[test]
@@ -194,7 +195,7 @@ mod tests {
             (Event::Deleted("s3://b/k".to_string()), 204)
         );
         assert!(session.objects().is_empty());
-        let other = Signer::new("s3", "r", "AKID", "wrong")
+        let other = signer("r", "AKID", "wrong")
             .sign(Request::new("GET", "/b/k").header("Host", "s3.local"), AT);
         let (event, response) = session.answer(&other);
         assert_eq!(event, Event::Refused("SignatureDoesNotMatch".to_string()));

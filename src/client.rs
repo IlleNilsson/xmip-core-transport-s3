@@ -17,6 +17,13 @@ use net::Endpoint;
 use net::http::{Request, Response};
 use net::percent::encode;
 
+/// The signer both ends of S3 sign and verify with: the `s3` scope, and
+/// the payload hash carried in `x-amz-content-sha256`, which S3 asks for.
+#[must_use]
+pub fn signer(region: &str, access_key: &str, secret_key: &str) -> Signer {
+    Signer::new("s3", region, access_key, secret_key).hashing_payload_in_header()
+}
+
 pub struct Client {
     endpoint: Endpoint,
     signer: Signer,
@@ -32,7 +39,7 @@ impl Client {
     pub fn new(endpoint: &str, region: &str, access_key: &str, secret_key: &str) -> Result<Self> {
         Ok(Self {
             endpoint: Endpoint::parse(endpoint)?,
-            signer: Signer::new("s3", region, access_key, secret_key),
+            signer: signer(region, access_key, secret_key),
             timeout: None,
         })
     }
