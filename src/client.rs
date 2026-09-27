@@ -54,7 +54,7 @@ impl Client {
         let request = Request::new("GET", format!("/{}", encode(bucket, false)))
             .query("list-type", "2")
             .query("prefix", prefix);
-        transport::xml::texts(&self.call(request)?.text(), "Key")
+        transport::xml::texts(self.call(request)?.text()?, "Key")
     }
 
     /// The object at `key` in `bucket`.
@@ -107,9 +107,10 @@ fn judge(response: Response) -> Result<Response> {
         "S3",
         response,
         |answer| {
-            transport::xml::first(&answer.text(), "Code")
+            answer
+                .text()
                 .ok()
-                .flatten()
+                .and_then(|xml| transport::xml::first(xml, "Code").ok().flatten())
                 .unwrap_or_default()
         },
         |code| code == "SlowDown",

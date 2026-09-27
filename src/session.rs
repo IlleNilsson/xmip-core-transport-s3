@@ -185,9 +185,9 @@ mod tests {
             Event::Stored(Arrived::new("s3://b/k", b"x".to_vec()))
         );
         let (_, response) = session.answer(&signed(Request::new("GET", "/b").query("prefix", "k")));
-        assert!(response.text().contains("<Key>k</Key>"));
+        assert!(response.text().expect("text").contains("<Key>k</Key>"));
         let (_, response) = session.answer(&signed(Request::new("GET", "/b").query("prefix", "z")));
-        assert!(!response.text().contains("<Key>"));
+        assert!(!response.text().expect("text").contains("<Key>"));
         let (event, response) = session.answer(&signed(Request::new("DELETE", "/b/k")));
         assert_eq!(
             (event, response.status),

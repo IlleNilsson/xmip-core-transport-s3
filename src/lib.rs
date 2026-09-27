@@ -45,7 +45,8 @@ use transport::error::{Result, protocol_error};
 use transport::listening::Listening;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
-use transport::{Arrived, Directions, NoNativeClaim, ResourceClaim, Transport};
+use transport::{Arrived, Configured, Directions, NoNativeClaim, ResourceClaim, Transport};
+use xcore::settings::{Applies, Kind, Presence, Read, Setting, Settings};
 
 /// What the loopback pair agrees on: one bucket, one object put there, one
 /// credential in one region that the far end expects and the near end
@@ -171,6 +172,60 @@ impl Transport for S3Transport {
     }
 }
 
+impl Configured for S3Transport {
+    /// The address is the S3 endpoint, `https://s3.<region>.amazonaws.com`.
+    /// The access key and its secret are the Location's credentials, not
+    /// settings: a secret never is.
+    const SETTINGS: &'static Settings = &Settings {
+        technology: env!("CARGO_PKG_NAME"),
+        settings: &[
+            Setting {
+                name: "region",
+                kind: Kind::Text,
+                presence: Presence::Required,
+                meaning: "The AWS region requests are signed for, eu-north-1.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "bucket",
+                kind: Kind::Text,
+                presence: Presence::Required,
+                meaning: "The bucket objects are taken from, and put in when a send target \
+                          names none.",
+                applies: Applies::Both,
+            },
+            Setting {
+                name: "prefix",
+                kind: Kind::Text,
+                presence: Presence::Optional,
+                meaning: "The key prefix a Receive Location takes objects under, in/; the \
+                          whole bucket when left out.",
+                applies: Applies::Receive,
+            },
+            Setting {
+                name: "timeout",
+                kind: Kind::Duration,
+                presence: Presence::Optional,
+                meaning: "How long an endpoint that stops answering is waited on; unbounded \
+                          when left out.",
+                applies: Applies::Both,
+            },
+        ],
+    };
+
+    fn configured(address: &str, settings: &Read) -> Result<Self> {
+        // The access key and secret come through the Location's credentials.
+        let mut transport = Self::new(address, settings.text("region"), settings.text("bucket"));
+        if let Some(prefix) = settings.optional_text("prefix") {
+            transport = transport.with_prefix(prefix);
+        }
+        Ok(match settings.optional_duration("timeout") {
+            Some(timeout) => transport.timing_out_after(timeout),
+            None => transport,
+        })
+    }
+}
+
 impl S3Transport {
     /// Both ends on this machine: an ephemeral local port, one credential
     /// the far end expects and the near end signs as, the loopback timeout.
@@ -222,6 +277,36 @@ mod tests {
             .with_credentials("AKID", secret)
             .with_prefix("in/")
             .timing_out_after(Duration::from_secs(2))
+    }
+
+    #[test]
+    fn s3_declares_its_settings_and_reads_through_them() {
+        use xcore::settings::Given;
+        assert_eq!(S3Transport::SETTINGS.problems(), Vec::<String>::new());
+        let text = |name: &str, value: &str| (name.to_string(), Given::Text(value.to_string()));
+        let endpoint = "https://s3.eu-north-1.amazonaws.com";
+        let given = [
+            text("region", "eu-north-1"),
+            text("bucket", "orders"),
+            text("prefix", "in/"),
+            text("timeout", "5s"),
+        ];
+        let received = S3Transport::open(endpoint, Applies::Receive, &given).expect("built");
+        assert_eq!(received.endpoint, endpoint);
+        assert_eq!(
+            (received.region.as_str(), received.bucket.as_str()),
+            ("eu-north-1", "orders")
+        );
+        assert_eq!(received.prefix, "in/");
+        assert_eq!(received.timeout, Some(Duration::from_secs(5)));
+        assert!(
+            received.secret_key.is_empty(),
+            "the secret is the credentials'"
+        );
+        let Err(refused) = S3Transport::open(endpoint, Applies::Send, &given[..1]) else {
+            panic!("the bucket is required");
+        };
+        assert!(refused.message.contains("\"bucket\""), "{refused}");
     }
 
     fn serve(
