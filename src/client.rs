@@ -11,7 +11,7 @@ use std::time::Duration;
 use transport::error::Result;
 
 use aws::sigv4::{self, Signer};
-use http::endpoint;
+use http::endpoint::{Connections, Offer};
 use http::status;
 use net::Endpoint;
 use net::http::{Request, Response};
@@ -28,6 +28,9 @@ pub struct Client {
     endpoint: Endpoint,
     signer: Signer,
     timeout: Option<Duration>,
+    /// The connections kept to the service, shared with the transport
+    /// that made this client.
+    connections: Connections,
 }
 
 impl Client {
@@ -41,6 +44,7 @@ impl Client {
             endpoint: Endpoint::parse(endpoint)?,
             signer: signer(region, access_key, secret_key),
             timeout: None,
+            connections: Connections::new(),
         })
     }
 
@@ -48,6 +52,14 @@ impl Client {
     #[must_use]
     pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
+        self
+    }
+
+    /// Keep connections among `connections`, which the transport holds
+    /// across every client it makes.
+    #[must_use]
+    pub fn sharing(mut self, connections: Connections) -> Self {
+        self.connections = connections;
         self
     }
 
@@ -98,8 +110,10 @@ impl Client {
             request.header("Host", &self.endpoint.authority()),
             &sigv4::now(),
         );
-        let stream = endpoint::connect(&self.endpoint, self.timeout)?;
-        judge(net::http::exchange(stream, &signed)?)
+        let answer =
+            self.connections
+                .exchange(&self.endpoint, self.timeout, Offer::Http11, &signed)?;
+        judge(answer)
     }
 }
 

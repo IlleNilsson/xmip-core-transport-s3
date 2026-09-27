@@ -39,6 +39,7 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 pub use client::Client;
+use http::endpoint::Connections;
 use net::Endpoint;
 pub use session::{Event, Session};
 use transport::error::{Result, protocol_error};
@@ -66,6 +67,9 @@ pub struct S3Transport {
     secret_key: String,
     prefix: String,
     timeout: Option<Duration>,
+    /// The connections kept to the service, shared by every client this
+    /// makes.
+    connections: Connections,
 }
 
 impl S3Transport {
@@ -81,6 +85,7 @@ impl S3Transport {
             secret_key: String::new(),
             prefix: String::new(),
             timeout: None,
+            connections: Connections::new(),
         }
     }
 
@@ -117,6 +122,7 @@ impl S3Transport {
             &self.access_key,
             &self.secret_key,
         )?;
+        let client = client.sharing(self.connections.clone());
         Ok(match self.timeout {
             Some(timeout) => client.timing_out_after(timeout),
             None => client,
