@@ -73,7 +73,7 @@ impl Client {
         let request = Request::new("GET", format!("/{}", encode(bucket, false)))
             .query("list-type", "2")
             .query("prefix", prefix);
-        transport::xml::texts(self.call(request)?.text()?, "Key")
+        Ok(codec::xml::texts(self.call(request)?.text()?, "Key")?)
     }
 
     /// The object at `key` in `bucket`.
@@ -131,7 +131,7 @@ fn judge(response: Response) -> Result<Response> {
             answer
                 .text()
                 .ok()
-                .and_then(|xml| transport::xml::first(xml, "Code").ok().flatten())
+                .and_then(|xml| codec::xml::text(xml, "Code").ok().flatten())
                 .unwrap_or_default()
         },
         |code| code == "SlowDown",

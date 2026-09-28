@@ -1,7 +1,7 @@
 //! The little XML S3 speaks: a listing naming keys, an error naming a code.
 //!
-//! Written by hand, both documents flat; read back by the capability's
-//! flat scan (ADR-0044), which is a scan, not a tree, because the one
+//! Written by hand, both documents flat; read back by the
+//! estate's flat scan (`codec::xml`), which is a scan, not a tree, because the one
 //! question either side asks is the text of every element by one name.
 
 use codec::xml::escape;
@@ -40,7 +40,7 @@ pub fn error(code: &str, message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use transport::xml::{first, texts};
+    use codec::xml::{text, texts};
 
     #[test]
     fn a_listing_names_its_keys_back_with_entities_intact() {
@@ -48,7 +48,7 @@ mod tests {
         let xml = listing("orders", "in/", &keys);
         assert!(xml.contains("<Key>in/a&amp;b.edi</Key>"));
         assert_eq!(texts(&xml, "Key").expect("read"), keys);
-        assert_eq!(first(&xml, "Prefix").expect("read").as_deref(), Some("in/"));
+        assert_eq!(text(&xml, "Prefix").expect("read").as_deref(), Some("in/"));
         assert!(texts(&xml, "Absent").expect("read").is_empty());
         assert!(texts("<Key>unclosed", "Key").expect("read").is_empty());
     }
@@ -60,9 +60,9 @@ mod tests {
             "The request signature we calculated",
         );
         assert_eq!(
-            first(&xml, "Code").expect("read").as_deref(),
+            text(&xml, "Code").expect("read").as_deref(),
             Some("SignatureDoesNotMatch")
         );
-        assert_eq!(first(&xml, "Absent").expect("read"), None);
+        assert_eq!(text(&xml, "Absent").expect("read"), None);
     }
 }
