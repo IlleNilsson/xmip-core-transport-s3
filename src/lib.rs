@@ -3,7 +3,7 @@
 //! Streams that arrive as objects in an S3 bucket. One object is one Stream,
 //! its key kept beside it.
 //!
-//! S3 is the partner drop box of the cloud era, and every object store
+//! S3 is the Party drop box of the cloud era, and every object store
 //! since speaks its REST API: a bucket, keys under a prefix, four calls. A
 //! Receive Location lists a prefix, gets each object and deletes it once it
 //! is safely a Stream; a Send Location puts a Stream as an object. Both are
