@@ -5,10 +5,13 @@
 //!
 //! S3 is the Party drop box of the cloud era, and every object store
 //! since speaks its REST API: a bucket, keys under a prefix, four calls. A
-//! Receive Location lists a prefix, gets each object and deletes it once it
-//! is safely a Stream; a Send Location puts a Stream as an object. Both are
-//! Signature Version 4 over plain HTTP/1.1 on a socket — `https://` with the
-//! `tls` feature, which is the http technology's TLS (ADR-0033).
+//! Receive Location lists a prefix, gets each object as the runtime first
+//! reads it, and deletes it once the runtime accepts or refuses it after
+//! the whole receive cycle — one whose cycle failed stays for the next
+//! receive; a Send Location puts a Stream as an object.
+//! Both are Signature Version 4 over plain HTTP/1.1 on a socket —
+//! `https://` with the `tls` feature, which is the http technology's TLS
+//! (ADR-0033).
 //!
 //! ```text
 //! xml.rs       the listing and the error, picked by hand
@@ -36,6 +39,7 @@ pub mod session;
 pub mod xml;
 
 use std::net::TcpListener;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub use client::Client;
@@ -43,6 +47,7 @@ use http::endpoint::Connections;
 use net::{Endpoint, Target};
 pub use session::{Event, Session};
 use transport::error::{Result, protocol_error};
+use transport::listed::listed;
 use transport::listening::Listening;
 use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
 use transport::socket;
@@ -158,16 +163,32 @@ impl Transport for S3Transport {
         Directions::BOTH
     }
 
-    /// Every object under the prefix, each deleted once it is a Stream.
+    fn arrivals(&self) -> transport::Arrivals {
+        transport::Arrivals::Ordered("a receive lists again what is not yet told")
+    }
+
+    /// Every object under the prefix, listed by [`listed`], the capability's
+    /// one object-store receive: the receive gets and deletes nothing, each
+    /// object's `GET` is made when the runtime first reads its body — whole,
+    /// `net::http` reads a `GET` body whole — and its acknowledgement
+    /// deletes it on [`transport::Verdict::Accepted`] and
+    /// [`transport::Verdict::Refused`] (a bucket has no place for a rejected
+    /// object) and leaves it on [`transport::Verdict::Failed`], for the next
+    /// receive to list and get again.
     fn receive(&self) -> Result<Vec<Arrived>> {
-        let client = self.client()?;
-        let mut arrived = Vec::new();
-        for key in client.list(&self.bucket, &self.prefix)? {
-            let bytes = client.get(&self.bucket, &key)?;
-            client.delete(&self.bucket, &key)?;
-            arrived.push(Arrived::new(format!("s3://{}/{key}", self.bucket), bytes));
-        }
-        Ok(arrived)
+        let client = Arc::new(self.client()?);
+        let (getting, deleting) = (Arc::clone(&client), Arc::clone(&client));
+        let (bucket, getting_from, deleting_from) = (
+            self.bucket.as_str(),
+            self.bucket.clone(),
+            self.bucket.clone(),
+        );
+        listed(
+            || client.list(bucket, &self.prefix),
+            |key| format!("s3://{bucket}/{key}"),
+            move |key| getting.get(&getting_from, key),
+            move |key| deleting.delete(&deleting_from, key),
+        )
     }
 
     fn send(&self, target: &str, bytes: &[u8]) -> Result<()> {
@@ -279,6 +300,7 @@ impl Loopback for S3Transport {
 mod tests {
     use super::*;
     use std::thread::JoinHandle;
+    use transport::Taken;
 
     fn node(endpoint: &str, secret: &str) -> S3Transport {
         S3Transport::new(endpoint, "eu-north-1", "orders")
@@ -331,29 +353,60 @@ mod tests {
     }
 
     #[test]
-    fn what_is_sent_to_a_session_is_received_back_and_deleted() {
+    fn an_object_is_got_when_read_and_deleted_when_accepted_or_refused_and_kept_when_failed() {
         let (listener, address) = socket::bind_tcp("127.0.0.1:0").expect("bind");
         let near = node(&format!("http://{address}"), "secret");
-        // Two puts, one list, then a get and a delete per object under in/.
-        let far_end = serve(near.session(), listener, 7);
+        // Three puts; a list, the one get read, two deletes; a list, a get,
+        // a delete.
+        let far_end = serve(near.session(), listener, 10);
         near.send("in/1.edi", b"UNA:+.? '").expect("a key alone");
         near.send("s3://orders/in/2.edi", b"")
             .expect("a full target");
+        near.send("in/3.edi", b"C3").expect("a key alone");
         let mut arrived = near.receive().expect("received");
         arrived.sort_by(|a, b| a.origin_uri.cmp(&b.origin_uri));
-        assert_eq!(arrived.len(), 2);
-        assert_eq!(arrived[0].origin_uri, "s3://orders/in/1.edi");
-        assert_eq!(arrived[0].bytes, b"UNA:+.? '");
-        assert_eq!(arrived[1].origin_uri, "s3://orders/in/2.edi");
-        assert!(arrived[1].bytes.is_empty());
+        assert_eq!(arrived.len(), 3);
+        assert!(arrived.iter().all(Arrived::defers));
+        let third = arrived.pop().expect("third");
+        let second = arrived.pop().expect("second");
+        assert_eq!(second.origin_uri, "s3://orders/in/2.edi");
+        let first = arrived.pop().expect("first").taken().expect("accepted");
+        assert_eq!(first.origin_uri, "s3://orders/in/1.edi");
+        assert_eq!(first.bytes, b"UNA:+.? '");
+        second.failed().expect("left");
+        third
+            .refused(transport::Refusal::Unacceptable)
+            .expect("deleted");
+        let again = near.receive().expect("received again");
+        assert_eq!(again.len(), 1, "the failed one, and only it");
+        let again = again.into_iter().next().expect("one").taken().expect("ok");
+        assert_eq!(again.origin_uri, "s3://orders/in/2.edi");
+        assert!(again.bytes.is_empty());
         let (session, events) = far_end.join().expect("thread");
-        assert!(session.objects().is_empty(), "deleted after retrieve");
+        assert!(session.objects().is_empty(), "deleted once answered");
         assert_eq!(
             events[0],
-            Event::Stored(Arrived::new("s3://orders/in/1.edi", b"UNA:+.? '".to_vec()))
+            Event::Stored(Taken::new("s3://orders/in/1.edi", b"UNA:+.? '".to_vec()))
         );
-        let deleted = events.iter().filter(|e| matches!(e, Event::Deleted(_)));
-        assert_eq!(deleted.count(), 2);
+        let named = |key: &str| format!("s3://orders/in/{key}");
+        assert!(matches!(events[3], Event::Listed { .. }));
+        assert_eq!(
+            events[4..7],
+            [
+                Event::Retrieved(named("1.edi")),
+                Event::Deleted(named("1.edi")),
+                Event::Deleted(named("3.edi")),
+            ],
+            "only what was read was got"
+        );
+        assert!(matches!(events[7], Event::Listed { .. }));
+        assert_eq!(
+            events[8..],
+            [
+                Event::Retrieved(named("2.edi")),
+                Event::Deleted(named("2.edi"))
+            ]
+        );
     }
 
     #[test]

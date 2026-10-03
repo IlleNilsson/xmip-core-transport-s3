@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::net::TcpListener;
 use std::time::Duration;
 
-use transport::Arrived;
+use transport::Taken;
 use transport::error::Result;
 
 use crate::client::signer;
@@ -29,7 +29,7 @@ pub enum Event {
     /// The client fetched this object.
     Retrieved(String),
     /// The client stored an object; here is the Stream.
-    Stored(Arrived),
+    Stored(Taken),
     /// The client deleted this object.
     Deleted(String),
     /// The client was answered with this S3 error code.
@@ -141,7 +141,7 @@ impl Session {
         self.objects
             .insert(format!("{bucket}/{key}"), bytes.to_vec());
         (
-            Event::Stored(Arrived::new(origin(bucket, key), bytes)),
+            Event::Stored(Taken::new(origin(bucket, key), bytes)),
             Response::new(200).header("ETag", "\"xmip\""),
         )
     }
@@ -181,10 +181,7 @@ mod tests {
         let mut session = Session::new("r", "AKID", "secret");
         let (event, response) = session.answer(&signed(Request::new("PUT", "/b/k").body(b"x")));
         assert_eq!(response.status, 200);
-        assert_eq!(
-            event,
-            Event::Stored(Arrived::new("s3://b/k", b"x".to_vec()))
-        );
+        assert_eq!(event, Event::Stored(Taken::new("s3://b/k", b"x".to_vec())));
         let (_, response) = session.answer(&signed(Request::new("GET", "/b").query("prefix", "k")));
         assert!(response.text().expect("text").contains("<Key>k</Key>"));
         let (_, response) = session.answer(&signed(Request::new("GET", "/b").query("prefix", "z")));
