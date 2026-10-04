@@ -63,17 +63,18 @@ impl Client {
         self
     }
 
-    /// The keys under `prefix` in `bucket`, as many as one listing carries
-    /// — a thousand — so a fuller prefix is taken a thousand at a time.
+    /// The keys under `prefix` in `bucket`, each with its `ETag`, as many
+    /// as one listing carries — a thousand — so a fuller prefix is taken a
+    /// thousand at a time.
     ///
     /// # Errors
     /// Where the endpoint refused, could not be reached, or did not answer
-    /// with a listing.
-    pub fn list(&self, bucket: &str, prefix: &str) -> Result<Vec<String>> {
+    /// with a listing naming each key's `ETag`.
+    pub fn list(&self, bucket: &str, prefix: &str) -> Result<Vec<(String, String)>> {
         let request = Request::new("GET", format!("/{}", encode(bucket, false)))
             .query("list-type", "2")
             .query("prefix", prefix);
-        Ok(codec::xml::texts(self.call(request)?.text()?, "Key")?)
+        crate::xml::OBJECTS.objects(self.call(request)?.text()?)
     }
 
     /// The object at `key` in `bucket`.
@@ -162,7 +163,8 @@ mod tests {
         client.put("orders", "out/c.edi", b"UNB").expect("put");
         assert_eq!(
             client.list("orders", "in/").expect("list"),
-            vec!["in/a b.edi".to_string()]
+            vec![("in/a b.edi".to_string(), "\"1\"".to_string())],
+            "the first object written"
         );
         assert_eq!(client.get("orders", "in/a b.edi").expect("get"), b"UNA");
         client.delete("orders", "in/a b.edi").expect("delete");

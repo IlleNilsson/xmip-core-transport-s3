@@ -6,9 +6,10 @@
 //! S3 is the Party drop box of the cloud era, and every object store
 //! since speaks its REST API: a bucket, keys under a prefix, four calls. A
 //! Receive Location lists a prefix, gets each object as the runtime first
-//! reads it, and deletes it once the runtime accepts or refuses it after
-//! the whole receive cycle — one whose cycle failed stays for the next
-//! receive; a Send Location puts a Stream as an object.
+//! reads it, and deletes it once the runtime accepts it after the whole
+//! receive cycle — one refused stays where it lies and is not received
+//! again while its `ETag` is unchanged, one whose cycle failed stays for
+//! the next receive; a Send Location puts a Stream as an object.
 //! Both are Signature Version 4 over plain HTTP/1.1 on a socket —
 //! `https://` with the `tls` feature, which is the http technology's TLS
 //! (ADR-0033).
@@ -75,6 +76,9 @@ pub struct S3Transport {
     /// The connections kept to the service, shared by every client this
     /// makes.
     connections: Connections,
+    /// The objects this Location refused and left in the bucket, each with
+    /// its `ETag`; a clone shares them.
+    refused: transport::Refused<String, String>,
 }
 
 impl S3Transport {
@@ -91,6 +95,7 @@ impl S3Transport {
             prefix: String::new(),
             timeout: None,
             connections: Connections::new(),
+            refused: transport::Refused::default(),
         }
     }
 
@@ -171,10 +176,13 @@ impl Transport for S3Transport {
     /// one object-store receive: the receive gets and deletes nothing, each
     /// object's `GET` is made when the runtime first reads its body — whole,
     /// `net::http` reads a `GET` body whole — and its acknowledgement
-    /// deletes it on [`transport::Verdict::Accepted`] and
-    /// [`transport::Verdict::Refused`] (a bucket has no place for a rejected
-    /// object) and leaves it on [`transport::Verdict::Failed`], for the next
-    /// receive to list and get again.
+    /// deletes it on [`transport::Verdict::Accepted`] only. On
+    /// [`transport::Verdict::Refused`] it is left where it lies and this
+    /// Location does not receive it again while its `ETag` is unchanged —
+    /// one written again is a new arrival; the memory is the node
+    /// process's, so a node started again receives it once more. On
+    /// [`transport::Verdict::Failed`] it is left for the next receive to
+    /// list and get again.
     fn receive(&self) -> Result<Vec<Arrived>> {
         let client = Arc::new(self.client()?);
         let (getting, deleting) = (Arc::clone(&client), Arc::clone(&client));
@@ -185,6 +193,7 @@ impl Transport for S3Transport {
         );
         listed(
             || client.list(bucket, &self.prefix),
+            &self.refused,
             |key| format!("s3://{bucket}/{key}"),
             move |key| getting.get(&getting_from, key),
             move |key| deleting.delete(&deleting_from, key),
@@ -353,16 +362,16 @@ mod tests {
     }
 
     #[test]
-    fn an_object_is_got_when_read_and_deleted_when_accepted_or_refused_and_kept_when_failed() {
+    fn an_object_is_got_when_read_deleted_when_accepted_and_left_when_refused_or_failed() {
         let (listener, address) = socket::bind_tcp("127.0.0.1:0").expect("bind");
         let near = node(&format!("http://{address}"), "secret");
-        // Three puts; a list, the one get read, two deletes; a list, a get,
-        // a delete.
+        // Three puts; a list, the one get read, its delete; a list, a get, a
+        // delete; a list to see what is left.
         let far_end = serve(near.session(), listener, 10);
         near.send("in/1.edi", b"UNA:+.? '").expect("a key alone");
         near.send("s3://orders/in/2.edi", b"")
             .expect("a full target");
-        near.send("in/3.edi", b"C3").expect("a key alone");
+        near.send("in/3.edi", b"third").expect("a key alone");
         let mut arrived = near.receive().expect("received");
         arrived.sort_by(|a, b| a.origin_uri.cmp(&b.origin_uri));
         assert_eq!(arrived.len(), 3);
@@ -376,14 +385,24 @@ mod tests {
         second.failed().expect("left");
         third
             .refused(transport::Refusal::Unacceptable)
-            .expect("deleted");
+            .expect("left");
         let again = near.receive().expect("received again");
-        assert_eq!(again.len(), 1, "the failed one, and only it");
+        assert_eq!(again.len(), 1, "the failed one, not the refused one");
         let again = again.into_iter().next().expect("one").taken().expect("ok");
         assert_eq!(again.origin_uri, "s3://orders/in/2.edi");
         assert!(again.bytes.is_empty());
+        let left = near
+            .client()
+            .expect("client")
+            .list("orders", "in/")
+            .expect("list");
+        assert_eq!(
+            left,
+            [("in/3.edi".to_string(), "\"3\"".to_string())],
+            "still there"
+        );
         let (session, events) = far_end.join().expect("thread");
-        assert!(session.objects().is_empty(), "deleted once answered");
+        assert_eq!(session.objects().len(), 1, "only the refused one is held");
         assert_eq!(
             events[0],
             Event::Stored(Taken::new("s3://orders/in/1.edi", b"UNA:+.? '".to_vec()))
@@ -391,22 +410,46 @@ mod tests {
         let named = |key: &str| format!("s3://orders/in/{key}");
         assert!(matches!(events[3], Event::Listed { .. }));
         assert_eq!(
-            events[4..7],
+            events[4..6],
             [
                 Event::Retrieved(named("1.edi")),
-                Event::Deleted(named("1.edi")),
-                Event::Deleted(named("3.edi")),
+                Event::Deleted(named("1.edi"))
             ],
-            "only what was read was got"
+            "only what was read was got, only what was accepted deleted"
         );
-        assert!(matches!(events[7], Event::Listed { .. }));
+        assert!(matches!(events[6], Event::Listed { .. }));
         assert_eq!(
-            events[8..],
+            events[7..9],
             [
                 Event::Retrieved(named("2.edi")),
                 Event::Deleted(named("2.edi"))
             ]
         );
+        assert!(matches!(events[9], Event::Listed { .. }));
+    }
+
+    #[test]
+    fn a_refused_object_is_not_received_again_until_it_is_written_again() {
+        let (listener, address) = socket::bind_tcp("127.0.0.1:0").expect("bind");
+        let near = node(&format!("http://{address}"), "secret");
+        // A put; a list; a list; a put again; a list, a get, a delete.
+        let far_end = serve(near.session(), listener, 7);
+        near.send("in/1.edi", b"first").expect("put");
+        let refused = near.receive().expect("received").remove(0);
+        refused
+            .refused(transport::Refusal::Forbidden)
+            .expect("left");
+        assert!(near.receive().expect("listed").is_empty(), "unchanged");
+        near.send("in/1.edi", b"second").expect("written again");
+        let again = near
+            .receive()
+            .expect("listed")
+            .remove(0)
+            .taken()
+            .expect("ok");
+        assert_eq!(again.bytes, b"second", "another ETag, a new arrival");
+        let (session, _) = far_end.join().expect("thread");
+        assert!(session.objects().is_empty(), "accepted, so deleted");
     }
 
     #[test]

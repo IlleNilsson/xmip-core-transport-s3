@@ -39,6 +39,10 @@ pub enum Event {
 pub struct Session {
     signer: Signer,
     objects: BTreeMap<String, Vec<u8>>,
+    /// Each object's `ETag`: the count of writes this session had made when
+    /// it was written, so one written again is tagged anew.
+    tags: BTreeMap<String, u64>,
+    writes: u64,
     timeout: Option<Duration>,
 }
 
@@ -49,6 +53,8 @@ impl Session {
         Self {
             signer: signer(region, access_key, secret_key),
             objects: BTreeMap::new(),
+            tags: BTreeMap::new(),
+            writes: 0,
             timeout: None,
         }
     }
@@ -63,7 +69,9 @@ impl Session {
     /// Hold these objects, keyed `bucket/key`.
     #[must_use]
     pub fn with_objects(mut self, objects: BTreeMap<String, Vec<u8>>) -> Self {
-        self.objects = objects;
+        for (held, bytes) in objects {
+            self.write(held, bytes);
+        }
         self
     }
 
@@ -107,15 +115,15 @@ impl Session {
             .unwrap_or_default()
             .to_string();
         let under = format!("{bucket}/{prefix}");
-        let keys: Vec<String> = self
-            .objects
-            .keys()
-            .filter(|held| held.starts_with(&under))
-            .map(|held| held[bucket.len() + 1..].to_string())
+        let listed: Vec<(String, String)> = self
+            .tags
+            .iter()
+            .filter(|(held, _)| held.starts_with(&under))
+            .map(|(held, written)| (held[bucket.len() + 1..].to_string(), etag(*written)))
             .collect();
         let response = Response::new(200)
             .header("Content-Type", "application/xml")
-            .body(xml::listing(bucket, &prefix, &keys).as_bytes());
+            .body(xml::listing(bucket, &prefix, &listed).as_bytes());
         (
             Event::Listed {
                 bucket: bucket.to_string(),
@@ -138,23 +146,37 @@ impl Session {
     }
 
     fn put(&mut self, bucket: &str, key: &str, bytes: &[u8]) -> (Event, Response) {
-        self.objects
-            .insert(format!("{bucket}/{key}"), bytes.to_vec());
+        let tag = self.write(format!("{bucket}/{key}"), bytes.to_vec());
         (
             Event::Stored(Taken::new(origin(bucket, key), bytes)),
-            Response::new(200).header("ETag", "\"xmip\""),
+            Response::new(200).header("ETag", &tag),
         )
+    }
+
+    /// Hold `bytes` as `held`, tagged anew, and say its `ETag`.
+    fn write(&mut self, held: String, bytes: Vec<u8>) -> String {
+        self.writes += 1;
+        self.tags.insert(held.clone(), self.writes);
+        self.objects.insert(held, bytes);
+        etag(self.writes)
     }
 
     fn delete(&mut self, bucket: &str, key: &str) -> (Event, Response) {
         // S3 answers 204 whether or not the key was there.
-        self.objects.remove(&format!("{bucket}/{key}"));
+        let held = format!("{bucket}/{key}");
+        self.objects.remove(&held);
+        self.tags.remove(&held);
         (Event::Deleted(origin(bucket, key)), Response::new(204))
     }
 }
 
 fn origin(bucket: &str, key: &str) -> String {
     format!("s3://{bucket}/{key}")
+}
+
+/// The `ETag` of the `written`th write, quoted as S3 quotes one.
+fn etag(written: u64) -> String {
+    format!("\"{written}\"")
 }
 
 fn refused(status: u16, code: &str, message: &str) -> (Event, Response) {
@@ -182,8 +204,17 @@ mod tests {
         let (event, response) = session.answer(&signed(Request::new("PUT", "/b/k").body(b"x")));
         assert_eq!(response.status, 200);
         assert_eq!(event, Event::Stored(Taken::new("s3://b/k", b"x".to_vec())));
+        assert_eq!(response.header_value("ETag"), Some("\"1\""));
+        let (_, response) = session.answer(&signed(Request::new("PUT", "/b/k").body(b"x")));
+        assert_eq!(
+            response.header_value("ETag"),
+            Some("\"2\""),
+            "written again"
+        );
         let (_, response) = session.answer(&signed(Request::new("GET", "/b").query("prefix", "k")));
-        assert!(response.text().expect("text").contains("<Key>k</Key>"));
+        let listing = response.text().expect("text");
+        let listed = xml::OBJECTS.objects(listing).expect("read");
+        assert_eq!(listed, [("k".to_string(), "\"2\"".to_string())]);
         let (_, response) = session.answer(&signed(Request::new("GET", "/b").query("prefix", "z")));
         assert!(!response.text().expect("text").contains("<Key>"));
         let (event, response) = session.answer(&signed(Request::new("DELETE", "/b/k")));
