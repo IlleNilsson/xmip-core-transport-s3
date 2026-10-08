@@ -47,6 +47,7 @@ pub use client::Client;
 use http::endpoint::Connections;
 use net::{Endpoint, Target};
 pub use session::{Event, Session};
+use transport::ArrivalIdentity;
 use transport::error::{Result, protocol_error};
 use transport::listed::listed;
 use transport::listening::Listening;
@@ -276,6 +277,12 @@ impl S3Transport {
 }
 
 impl Loopback for S3Transport {
+    fn arrival_identity(&self) -> ArrivalIdentity {
+        ArrivalIdentity::Unnamed(
+            "an object names no sender: the bucket it was taken from is in its origin",
+        )
+    }
+
     /// A bound session waiting for its one store. S3 opens a connection per
     /// call, so the session serves one request at a time until one stored.
     fn far_end(&self) -> Result<Box<dyn FarEnd>> {
