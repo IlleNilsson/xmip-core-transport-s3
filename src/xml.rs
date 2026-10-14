@@ -70,12 +70,10 @@ mod tests {
         assert!(xml.contains("<Key>in/a&amp;b.edi</Key><ETag>&quot;1&quot;</ETag>"));
         assert_eq!(OBJECTS.objects(&xml).expect("read"), held);
         assert_eq!(text(&xml, "Prefix").expect("read").as_deref(), Some("in/"));
-        assert!(texts(&xml, "Absent").expect("read").is_empty());
-        assert!(
-            OBJECTS
-                .objects("<Contents><Key>unclosed")
-                .expect("read")
-                .is_empty()
+        assert_eq!(texts(&xml, "Absent").expect("read"), [] as [String; 0]);
+        assert_eq!(
+            OBJECTS.objects("<Contents><Key>unclosed").expect("read"),
+            [] as [(String, String); 0]
         );
         let untagged = OBJECTS
             .objects("<Contents><Key>k</Key></Contents>")
