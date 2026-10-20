@@ -20,7 +20,7 @@
 //! session.rs   the far end a test or the playground runs on loopback
 //! ```
 //!
-//! The endpoint, HTTP itself and the judgement of an answer come from the
+//! The endpoint, HTTP itself and the judgment of an answer come from the
 //! http technology, the percent-encoding from `net`, Signature Version 4
 //! from the AWS crate, the flat XML scan from the capability (ADR-0044). The signer
 //! lived here until 2026-09-14, when aws-sqs was found importing it, and in
@@ -491,7 +491,7 @@ mod tests {
     }
 
     #[test]
-    fn objects_are_artefacts_without_a_lock_and_an_unreachable_endpoint_is_retryable() {
+    fn objects_are_artifacts_without_a_lock_and_an_unreachable_endpoint_is_retryable() {
         let near = node("http://127.0.0.1:1", "secret");
         assert!(near.claims().is_some());
         assert_eq!(near.name(), "s3");
