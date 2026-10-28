@@ -11,11 +11,11 @@ use std::time::Duration;
 use transport::error::Result;
 
 use aws::sigv4::{self, Signer};
+use codec::percent::encode;
 use http::endpoint::{Connections, Offer};
 use http::status;
 use net::Endpoint;
 use net::http::{Request, Response};
-use net::percent::encode;
 
 /// The signer both ends of S3 sign and verify with: the `s3` scope, and
 /// the payload hash carried in `x-amz-content-sha256`, which S3 asks for.
