@@ -154,7 +154,7 @@ impl S3Transport {
     /// Where a target names the bucket and key itself — `s3://bucket/key`
     /// — or is a key alone in this transport's bucket.
     fn resolve<'a>(&'a self, target: &'a str) -> (&'a str, &'a str) {
-        Target::under(&["s3"], target).map_or((&self.bucket, target), |named| {
+        Target::under(Self::SCHEMES, target).map_or((&self.bucket, target), |named| {
             (named.authority(), named.path())
         })
     }
@@ -263,6 +263,9 @@ impl Configured for S3Transport {
             },
         ],
     };
+
+    /// The schemes a Location's address is entered with to choose this technology.
+    const SCHEMES: &'static [&'static str] = &["s3"];
 
     fn configured(address: &str, settings: &Read) -> Result<Self> {
         // The access key and secret come through the Location's credentials.
