@@ -1,5 +1,5 @@
 //! The far end: enough of S3 to answer one Location, and what a test or the
-//! playground puts on loopback.
+//! essentials puts on loopback.
 //!
 //! Not S3. One session holds objects in memory, verifies every request
 //! against one credential, and answers the four calls with the shapes S3
