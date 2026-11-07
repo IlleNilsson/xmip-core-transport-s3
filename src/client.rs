@@ -143,6 +143,7 @@ fn judge(response: Response) -> Result<Response> {
 mod tests {
     use super::*;
     use crate::session::{Event, Session};
+    use std::assert_matches;
     use transport::socket;
 
     #[test]
@@ -173,7 +174,7 @@ mod tests {
         assert!(!missing.retryable);
         let (session, events) = far_end.join().expect("thread");
         assert_eq!(session.objects().len(), 1);
-        assert!(matches!(&events[2], Event::Listed { prefix, .. } if prefix == "in/"));
+        assert_matches!(&events[2], Event::Listed { prefix, .. } if prefix == "in/");
         assert_eq!(
             events[3],
             Event::Retrieved("s3://orders/in/a b.edi".to_string())
